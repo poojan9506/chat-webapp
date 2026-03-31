@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no"
+    />
+    <title>Dark Chat | Real‑time</title>
+    <!-- Tailwind CSS + Font Awesome + Google Fonts -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&display=swap"
+      rel="stylesheet"
+    />
+    <!-- Socket.IO client -->
+    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+    <style>
+      * {
+        font-family: "Inter", sans-serif;
+      }
+      body {
+        background: radial-gradient(circle at 20% 30%, #0b1120, #030712);
+      }
+      /* Custom scrollbar */
+      .messages-container::-webkit-scrollbar {
+        width: 6px;
+      }
+      .messages-container::-webkit-scrollbar-track {
+        background: #1e293b;
+        border-radius: 10px;
+      }
+      .messages-container::-webkit-scrollbar-thumb {
+        background: #4b5563;
+        border-radius: 10px;
+      }
+      /* Message animation */
+      .message-item {
+        animation: fadeSlideUp 0.25s ease-out forwards;
+        opacity: 0;
+        transform: translateY(12px);
+      }
+      @keyframes fadeSlideUp {
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      /* Button pulse */
+      .send-btn {
+        transition: all 0.2s ease;
+      }
+      .send-btn:active {
+        transform: scale(0.96);
+      }
+      /* Glass effect */
+      .glass-panel {
+        background: rgba(15, 23, 42, 0.7);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+      }
+    </style>
+  </head>
+  <body class="flex items-center justify-center min-h-screen p-4">
+    <div
+      class="w-full max-w-4xl h-[85vh] glass-panel rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+    >
+      <!-- Header -->
+      <div
+        class="px-6 py-4 border-b border-white/10 flex justify-between items-center bg-black/20"
+      >
+        <div class="flex items-center gap-3">
+          <i class="fab fa-weixin text-indigo-400 text-2xl"></i>
+          <h1
+            class="text-2xl font-semibold bg-gradient-to-r from-indigo-300 to-purple-300 bg-clip-text text-transparent"
+          >
+            DarkChat
+          </h1>
+          <div class="flex items-center gap-1 ml-2">
+            <span
+              id="connectionBadge"
+              class="w-2 h-2 rounded-full bg-green-500 animate-pulse"
+            ></span>
+            <span class="text-xs text-gray-400">live</span>
+          </div>
+        </div>
+        <div class="text-xs text-gray-500 hidden sm:block">
+          <i class="fas fa-database mr-1"></i> stored in .txt
+        </div>
+      </div>
+
+      <!-- Messages container -->
+      <div
+        id="messagesContainer"
+        class="messages-container flex-1 overflow-y-auto p-5 space-y-3 scroll-smooth"
+      >
+        <div class="text-center text-gray-500 text-sm py-8">
+          <i class="fas fa-comment-dots mr-2"></i> No messages yet. Start the
+          conversation!
+        </div>
+      </div>
+
+      <!-- Input area -->
+      <div class="p-4 border-t border-white/10 bg-black/20">
+        <!-- Nickname row -->
+        <div class="flex items-center gap-2 mb-3">
+          <i class="fas fa-user-astronaut text-indigo-300 text-sm"></i>
+          <input
+            type="text"
+            id="nicknameInput"
+            placeholder="Nickname"
+            maxlength="20"
+            class="bg-gray-800/70 text-white text-sm rounded-full px-3 py-1.5 w-32 focus:outline-none focus:ring-1 focus:ring-indigo-500 border border-gray-700"
+          />
+          <span class="text-xs text-gray-400">change anytime</span>
+        </div>
+        <!-- Message bar -->
+        <div class="flex gap-2">
+          <input
+            type="text"
+            id="messageInput"
+            placeholder="Type your message..."
+            autocomplete="off"
+            class="flex-1 bg-gray-800/80 text-white rounded-xl px-5 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 border border-gray-700 transition-all"
+          />
+          <button
+            id="sendBtn"
+            class="send-btn bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl px-6 py-3 font-medium shadow-lg flex items-center gap-2 transition-all"
+          >
+            <i class="fas fa-paper-plane text-sm"></i> Send
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // DOM elements
+      const messagesContainer = document.getElementById("messagesContainer");
+      const messageInput = document.getElementById("messageInput");
+      const sendBtn = document.getElementById("sendBtn");
+      const nicknameInput = document.getElementById("nicknameInput");
+      const connectionBadge = document.getElementById("connectionBadge");
+
+      // Socket connection
+      const socket = io();
+
+      // ---------- Local nickname management ----------
+      let currentNickname =
+        localStorage.getItem("chat_nickname") ||
+        "User_" + Math.floor(Math.random() * 1000);
+      nicknameInput.value = currentNickname;
+
+      nicknameInput.addEventListener("change", () => {
+        let newName = nicknameInput.value.trim();
+        if (newName === "") newName = "Anonymous";
+        if (newName.length > 20) newName = newName.slice(0, 20);
+        currentNickname = newName;
+        localStorage.setItem("chat_nickname", currentNickname);
+        nicknameInput.value = currentNickname;
+      });
+
+      // ---------- Helper: render a single message ----------
+      function renderMessage(msgObj, isOwn = false) {
+        const { username, message, timestamp } = msgObj;
+        const timeFormatted = new Date(timestamp).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        const messageDiv = document.createElement("div");
+        messageDiv.className = `message-item flex ${isOwn ? "justify-end" : "justify-start"}`;
+
+        // bubble style
+        const bubbleClass = isOwn
+          ? "bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-2xl rounded-tr-none"
+          : "bg-gray-800/80 text-gray-200 rounded-2xl rounded-tl-none border border-gray-700";
+
+        messageDiv.innerHTML = `
+                <div class="max-w-[80%] ${bubbleClass} px-4 py-2 shadow-md">
+                    <div class="flex items-center gap-2 text-xs mb-1 ${isOwn ? "text-indigo-200" : "text-indigo-300"}">
+                        <i class="fas fa-user-circle text-xs"></i>
+                        <span class="font-semibold">${escapeHtml(username)}</span>
+                        <span class="text-gray-400 text-[10px]">${timeFormatted}</span>
+                    </div>
+                    <div class="break-words text-sm leading-relaxed">${escapeHtml(message)}</div>
+                </div>
+            `;
+        return messageDiv;
+      }
+
+      function escapeHtml(str) {
+        if (!str) return "";
+        return str
+          .replace(/[&<>]/g, function (m) {
+            if (m === "&") return "&amp;";
+            if (m === "<") return "&lt;";
+            if (m === ">") return "&gt;";
+            return m;
+          })
+          .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, function (c) {
+            return c;
+          });
+      }
+
+      // ---------- Load full history ----------
+      function loadHistory(messages) {
+        messagesContainer.innerHTML = "";
+        if (!messages || messages.length === 0) {
+          messagesContainer.innerHTML =
+            '<div class="text-center text-gray-500 text-sm py-8"><i class="fas fa-comment-dots mr-2"></i> No messages yet. Start the conversation!</div>';
+          return;
+        }
+        messages.forEach((msg) => {
+          const isOwn = msg.username === currentNickname;
+          const msgElem = renderMessage(msg, isOwn);
+          messagesContainer.appendChild(msgElem);
+        });
+        scrollToBottom();
+      }
+
+      // Append one new message (from socket)
+      function appendNewMessage(msgObj) {
+        const isOwn = msgObj.username === currentNickname;
+        const msgElem = renderMessage(msgObj, isOwn);
+        // remove placeholder if it's the first message
+        if (
+          messagesContainer.children.length === 1 &&
+          messagesContainer.children[0].innerText.includes("No messages yet")
+        ) {
+          messagesContainer.innerHTML = "";
+        }
+        messagesContainer.appendChild(msgElem);
+        scrollToBottom();
+      }
+
+      function scrollToBottom() {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }
+
+      // ---------- Socket events ----------
+      socket.on("connect", () => {
+        connectionBadge.className =
+          "w-2 h-2 rounded-full bg-green-500 animate-pulse";
+        socket.emit("get_history");
+      });
+
+      socket.on("disconnect", () => {
+        connectionBadge.className = "w-2 h-2 rounded-full bg-red-500";
+      });
+
+      socket.on("history", (messages) => {
+        loadHistory(messages);
+      });
+
+      socket.on("new_message", (msgObj) => {
+        appendNewMessage(msgObj);
+      });
+
+      // ---------- Send message ----------
+      function sendMessage() {
+        const text = messageInput.value.trim();
+        if (!text) return;
+        const nickname = currentNickname.trim() || "Anonymous";
+        socket.emit("send_message", {
+          username: nickname,
+          message: text,
+        });
+        messageInput.value = "";
+        messageInput.focus();
+      }
+
+      sendBtn.addEventListener("click", sendMessage);
+      messageInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") sendMessage();
+      });
+
+      // initial focus
+      messageInput.focus();
+    </script>
+  </body>
+</html>
